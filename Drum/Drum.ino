@@ -312,6 +312,7 @@ long adcTime = 0;
 long loopFreq = 0;
 long loopTime = 0;
 float attack = 0;
+unsigned long piezoLockOut = 10;
 
 ISR(TIMER1_COMPA_vect) {
   if(isrFreq++ >= 400000) {
@@ -324,15 +325,18 @@ ISR(TIMER1_COMPA_vect) {
   //-------------------  Ringbuffer handler -------------------------
     
   if (RingCount) {                            //If entry in FIFO..
-//      OCR2A = Ringbuffer[(RingRead++)];          //Output LSB of 16-bit DAC
-    uint16_t value = Ringbuffer[(RingRead++)] * attack;
+    OCR2A = Ringbuffer[(RingRead++)];          //Output LSB of 16-bit DAC
+    // uint16_t value = Ringbuffer[(RingRead++)];
     // Serial.print("output value: ");
     // Serial.println(value);
-    uint16_t dac_out = (0 << 15) | (1 << 14) | (1 << 13) | (1 << 12) | ( value );
-    digitalWrite(10, LOW);
-    SPI.transfer(dac_out >> 8);
-    SPI.transfer(dac_out & 255);
-    digitalWrite(10, HIGH);
+    // if(value) {
+    //   uint16_t dac_out = (0 << 15) | (1 << 14) | (1 << 13) | (1 << 12) | ( value );
+    //   //uint16_t dac_out = 0xb01110000 | value;
+    //   digitalWriteFast(10, LOW);
+    //   SPI.transfer(dac_out >> 8);
+    //   SPI.transfer(dac_out & 255);
+    //   digitalWriteFast(10, HIGH);
+    // }
     RingCount--;
   }
     
@@ -362,10 +366,10 @@ void setup() {
 //    pinMode(10,INPUT_PULLUP);
 
   //SPI
-  pinMode (12, OUTPUT); pinMode (13, OUTPUT); pinMode (11, OUTPUT); pinMode (10, OUTPUT);
+  //pinMode (12, OUTPUT); pinMode (13, OUTPUT); pinMode (11, OUTPUT); pinMode (10, OUTPUT);
 
   //8-bit PWM DAC pin
-  //pinMode(11,OUTPUT);
+  pinMode(11,OUTPUT);
 
   // Set up Timer 1 to send a sample every interrupt.
   cli();
@@ -386,35 +390,35 @@ void setup() {
 
 // Set up Timer 2 to do pulse width modulation on D11
 
-  // // Use internal clock (datasheet p.160)
-  // ASSR &= ~(_BV(EXCLK) | _BV(AS2));
+  // Use internal clock (datasheet p.160)
+  ASSR &= ~(_BV(EXCLK) | _BV(AS2));
 
-  // // Set fast PWM mode  (p.157)
-  // TCCR2A |= _BV(WGM21) | _BV(WGM20);
-  // TCCR2B &= ~_BV(WGM22);
+  // Set fast PWM mode  (p.157)
+  TCCR2A |= _BV(WGM21) | _BV(WGM20);
+  TCCR2B &= ~_BV(WGM22);
 
-  // // Do non-inverting PWM on pin OC2A (p.155)
-  // // On the Arduino this is pin 11.
-  // TCCR2A = (TCCR2A | _BV(COM2A1)) & ~_BV(COM2A0);
-  // TCCR2A &= ~(_BV(COM2B1) | _BV(COM2B0));
-  // // No prescaler (p.158)
-  // TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
+  // Do non-inverting PWM on pin OC2A (p.155)
+  // On the Arduino this is pin 11.
+  TCCR2A = (TCCR2A | _BV(COM2A1)) & ~_BV(COM2A0);
+  TCCR2A &= ~(_BV(COM2B1) | _BV(COM2B0));
+  // No prescaler (p.158)
+  TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
 
-  // // Set initial pulse width to the first sample.
-  // OCR2A = 128;
+  // Set initial pulse width to the first sample.
+  OCR2A = 128;
 
-  // //set timer0 interrupt at 61Hz
-  // TCCR0A = 0;// set entire TCCR0A register to 0
-  // TCCR0B = 0;// same for TCCR0B
-  // TCNT0  = 0;//initialize counter value to 0
-  // // set compare match register for 62hz increments
-  // OCR0A = 255;// = 61Hz
-  // // turn on CTC mode
-  // TCCR0A |= (1 << WGM01);
-  // // Set CS01 and CS00 bits for prescaler 1024
-  // TCCR0B |= (1 << CS02) | (0 << CS01) | (1 << CS00);  //1024 prescaler 
+  //set timer0 interrupt at 61Hz
+  TCCR0A = 0;// set entire TCCR0A register to 0
+  TCCR0B = 0;// same for TCCR0B
+  TCNT0  = 0;//initialize counter value to 0
+  // set compare match register for 62hz increments
+  OCR0A = 255;// = 61Hz
+  // turn on CTC mode
+  TCCR0A |= (1 << WGM01);
+  // Set CS01 and CS00 bits for prescaler 1024
+  TCCR0B |= (1 << CS02) | (0 << CS01) | (1 << CS00);  //1024 prescaler 
 
-  // TIMSK0=0;
+  TIMSK0=0;
 
 
   // set up the ADC
@@ -425,8 +429,9 @@ void setup() {
   // ADMUX = 64;
   // sbi(ADCSRA, ADSC);
          
-  SPI.begin();
-  SPI.setBitOrder(MSBFIRST);
+  // SPI.begin();
+  // SPI.beginTransaction (SPISettings (16000000, MSBFIRST, SPI_MODE0));
+    //SPI.setBitOrder(MSBFIRST);
 }
 
 
@@ -435,7 +440,7 @@ void loop() {
   
   uint8_t phaccBD,phaccCH,phaccCL,phaccCR,phaccOH,phaccRD,phaccRS,phaccSD;
   uint8_t pitch=128;
-  uint16_t piezo=0;
+  uint16_t piezo=0, piezotmp=0, piezomax=0;
   uint16_t samplecntBD,samplecntCH,samplecntCL,samplecntCR,samplecntOH,samplecntRD,samplecntRS,samplecntSD;
   uint16_t samplepntBD,samplepntCH,samplepntCL,samplepntCR,samplepntOH,samplepntRD,samplepntRS,samplepntSD;
   
@@ -446,6 +451,8 @@ void loop() {
   uint8_t divider;
   uint8_t MUX=0;
   uint8_t inputSelect = 0;
+  unsigned long lastHit = 0;
+  uint16_t lockOut = 0, inputLockOut = 0;
   
   while(1) { 
 
@@ -455,7 +462,9 @@ void loop() {
     Serial.println(loopFreq/(float)(now - loopTime));
     loopFreq = 0;
     loopTime = now;
-  }
+    Serial.print("ring count: ");
+    Serial.println(RingCount);
+    }
     //------ Add current sample word to ringbuffer FIFO --------------------  
         
     if (RingCount<255) {  //if space in ringbuffer
@@ -469,7 +478,7 @@ void loop() {
           samplecntBD--;
                 
         }
-      }
+      } else
       if (samplecntSD) {
         phaccSD+=pitch;
         if (phaccSD & 128) {
@@ -479,7 +488,7 @@ void loop() {
           samplecntSD--;
                 
         }
-      }
+      } else
       if (samplecntCL) {
         phaccCL+=pitch;
         if (phaccCL & 128) {
@@ -489,7 +498,7 @@ void loop() {
           samplecntCL--;
                 
         }
-      }
+      } else
       if (samplecntRS) {
         phaccRS+=pitch;
         if (phaccRS & 128) {
@@ -499,7 +508,7 @@ void loop() {
           samplecntRS--;
                 
         }
-      }
+      } else
       if (samplecntCH) {
         phaccCH+=pitch;
         if (phaccCH & 128) {
@@ -509,7 +518,7 @@ void loop() {
           samplecntCH--;
                 
         }
-      }    
+      } else 
       if (samplecntOH) {
         phaccOH+=pitch;
         if (phaccOH & 128) {
@@ -519,7 +528,7 @@ void loop() {
           samplecntOH--;
                 
         }
-      }  
+      } else
       if (samplecntCR) {
         phaccCR+=pitch;
         if (phaccCR & 128) {
@@ -529,7 +538,7 @@ void loop() {
           samplecntCR--;
                 
         }
-      }  
+      } else
       if (samplecntRD) {
         phaccRD+=pitch;
         if (phaccRD & 128) {
@@ -539,14 +548,14 @@ void loop() {
           samplecntRD--;
                 
         }
-      }  
+      }
       total>>=1;  
 //      if (!(PINB&4)) total>>=1;
       total+=128;  
       if (total>255) total=255;
       
       cli();
-      Ringbuffer[RingWrite]=total;
+      Ringbuffer[RingWrite]=total * attack;
       RingWrite++;
       RingCount++;
       sei();
@@ -555,13 +564,17 @@ void loop() {
 //----------------------------------------------------------------------------
 
 //----------------- Handle Triggers ------------------------------
-    if (!digitalRead(2)) {
+    if(inputLockOut) inputLockOut--;
+    if (!digitalReadFast(2) && inputLockOut == 0) {
       if(++inputSelect > 7) inputSelect = 0;
-      delay(200);
+      Serial.print("input select: ");
+      Serial.println(inputSelect);
+      inputLockOut = 10000;
+      // delay(200);
     }
     if(piezo > 100) {
-      attack = piezo * 16/1024;
-      piezo = 0;
+      // attack = piezo * 16/1024;
+      attack = piezo / 1024.0;
 //      delay(50);
 
       Serial.print("piezo value: ");
@@ -570,6 +583,7 @@ void loop() {
       Serial.println(inputSelect);
       Serial.print("pitch value: ");
       Serial.println(pitch);
+      piezo = 0;
       
       if (inputSelect == 0) {
         samplepntBD=0;
@@ -617,14 +631,6 @@ void loop() {
     // } else {
     //   piezo = 0;
     // }
-    if(piezotmp > 100) {
-      if(piezotmp > piezomax) {
-        piezomax = piezotmp;
-      } else {
-        piezo = piezomax;
-        piezomax = 0;
-      }
-    }
       
       
     
@@ -639,6 +645,7 @@ void loop() {
         Serial.print("pitch value: ");
         Serial.println(pitch);
       }
+      if(lockOut) lockOut--;
       if (MUX==0) {
         // int pitchRaw = analogread(A0);
         pitch=((ADCL+(ADCH<<8))>>3)+1;
@@ -648,6 +655,16 @@ void loop() {
         // sbi(ADMUX, MUX1);
       } else if (MUX==1) {
         piezotmp = ADCL+(ADCH<<8);
+        if((piezotmp > 100 || piezomax > 0) && lockOut == 0) {
+          if(piezotmp > piezomax) {
+            piezomax = piezotmp;
+          } else {
+            piezo = piezomax;
+            piezomax = 0;
+            lockOut = 1000;
+            // lastHit = millis();
+          }
+        }
         //piezo = anlogRead(A1);
         if (!(divider++)) {
           MUX = 0;
