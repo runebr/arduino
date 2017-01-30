@@ -17,7 +17,7 @@ uint8_t adc_read (void) {
 ISR(PCINT0_vect) {
 
   PORTB |= _BV(LDR_POWER);
-  ADCSRA |= (1 << ADEN);    // Enable ADC 
+//  ADCSRA |= (1 << ADEN);    // Enable ADC 
 
   if(bit_is_set(PINB, PB3)  && adc_read() < 20) {
     PORTB |= _BV(LED);
@@ -27,7 +27,7 @@ ISR(PCINT0_vect) {
     TIMSK0 |=1<<TOIE0;
   }
   PORTB &= ~(_BV(LDR_POWER));  
-  ADCSRA &= ~(_BV(ADEN));
+//  ADCSRA &= ~(_BV(ADEN));
  /* else { */
  /*   PORTB &= ~(_BV(LED)); */
  /* } */
@@ -45,6 +45,27 @@ ISR(TIM0_OVF_vect) {
       PORTB = 0x00;
     }
   }
+}
+
+void goToSleep(void)
+{
+  byte adcsra, mcucr1, mcucr2;
+
+//  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  sleep_enable();
+//  MCUCR &= ~(_BV(ISC01) | _BV(ISC00));      //INT0 on low level
+//    GIMSK |= _BV(INT0);                       //enable INT0
+  adcsra = ADCSRA;                          //save ADCSRA
+  ADCSRA &= ~_BV(ADEN);                     //disable ADC
+  cli();                                    //stop interrupts to ensure the BOD timed sequence executes as required
+  mcucr1 = MCUCR | _BV(BODS) | _BV(BODSE);  //turn off the brown-out detector
+  mcucr2 = mcucr1 & ~_BV(BODSE);            //if the MCU does not have BOD disable capability,
+  MCUCR = mcucr1;                           //  this code has no effect
+  MCUCR = mcucr2;
+  sei();                                    //ensure interrupts enabled so we can wake up again
+  sleep_cpu();                              //go to sleep
+  sleep_disable();                          //wake up here
+  ADCSRA = adcsra;                          //restore ADCSRA
 }
 
 
@@ -85,7 +106,7 @@ void initADC()
             (0 << MUX0);       // use ADC2 for input (PB4), MUX bit 0
 
   ADCSRA = 
-            (0 << ADEN)  |     // Disable ADC 
+            (1 << ADEN)  |     // Enable ADC 
             (1 << ADPS2) |     // set prescaler to 64, bit 2 
             (0 << ADPS1) |     // set prescaler to 64, bit 1 
             (0 << ADPS0);      // set prescaler to 64, bit 0  
@@ -99,7 +120,8 @@ int main(void) {
   PORTB = 0x00;
 
   initADC();
-  
+  //ADCSRA |= (1 << ADEN);    // Enable ADC 
+
   // Set up pin change interrupt on pin PB3
   PCMSK |= 1 << PCINT3;
   // Enable pin change interrupt
@@ -112,6 +134,10 @@ int main(void) {
   // Use the Power Down sleep mode
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   while(1) {
+    goToSleep();
+  }
+  while(1) {
+
     //sleep_mode();   // go to sleep and wait for interrupt...
     cli();
     //PRR |= (1<<PRTIM0) | (1<<PRADC);
