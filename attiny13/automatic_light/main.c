@@ -68,6 +68,17 @@ void goToSleep(void)
   ADCSRA = adcsra;                          //restore ADCSRA
 }
 
+/* int ttysend(int c) */
+/* { */
+/* 	int cnt, port; */
+/* 	c |= 0x100;	/\* stop bit *\/ */
+/* 	c <<= 1;	/\* start bit *\/ */
+/* 	for (cnt = 10; --cnt >= 0; c >>= 1) { */
+/* 		port = c & 1; */
+/* 		_delay_us(416); */
+/* 	} */
+/* 	return c; */
+/* } */
 
 void initADC()
 {
