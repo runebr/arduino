@@ -7,6 +7,8 @@
 #include <avr/io.h>
 #include <avr/pgmspace.h>
 #include <SPI.h>
+#include <avr/sleep.h>    // Sleep Modes
+#include <avr/power.h>    // Power management
 
 
 #ifndef cbi
@@ -314,29 +316,26 @@ long loopTime = 0;
 float attack = 0;
 unsigned long piezoLockOut = 10;
 
+const uint8_t drum_select_pin = 2;
+const uint8_t led_pin = 3;
+const uint8_t amp_control_pin=13;
+const uint8_t piezo_pin=A1;
+const uint8_t pitch_pin=A0;
+
+const long SLEEP_TIMEOUT = 4000000; 
+
+
+ISR(BADISR_vect)
+{
+
+    for (;;) UDR0='!';
+}
+
 ISR(TIMER1_COMPA_vect) {
-  if(isrFreq++ >= 400000) {
-    long now = millis();
-    Serial.print("isr frequency: ");
-    Serial.println(isrFreq/(float)(now - isrTime));
-    isrFreq = 0;
-    isrTime = now;
-  }
   //-------------------  Ringbuffer handler -------------------------
     
   if (RingCount) {                            //If entry in FIFO..
     OCR2A = Ringbuffer[(RingRead++)];          //Output LSB of 16-bit DAC
-    // uint16_t value = Ringbuffer[(RingRead++)];
-    // Serial.print("output value: ");
-    // Serial.println(value);
-    // if(value) {
-    //   uint16_t dac_out = (0 << 15) | (1 << 14) | (1 << 13) | (1 << 12) | ( value );
-    //   //uint16_t dac_out = 0xb01110000 | value;
-    //   digitalWriteFast(10, LOW);
-    //   SPI.transfer(dac_out >> 8);
-    //   SPI.transfer(dac_out & 255);
-    //   digitalWriteFast(10, HIGH);
-    // }
     RingCount--;
   }
     
@@ -348,21 +347,32 @@ ISR(TIMER1_COMPA_vect) {
 
 void setup() {
   Serial.begin(9600);
-  long now = millis();
-  isrTime = now;
-  adcTime = now;
-  loopTime = now;
+  if(MCUSR & (1<<PORF )) Serial.println("Power-on reset.\n");
+  if(MCUSR & (1<<EXTRF)) Serial.println("External reset!\n");
+  if(MCUSR & (1<<BORF )) Serial.println("Brownout reset!\n");
+  if(MCUSR & (1<<WDRF )) Serial.println("Watchdog reset!\n");
+  MCUSR = 0;
   OSCCAL=0xFF;
-    
+  for (byte i=0; i<A5; i++) {
+    pinMode(i, INPUT_PULLUP);        //make all pins input pins
+  }
+  Serial.println("Setup");
   //Drumtrigger inputs
-  pinMode(2,INPUT_PULLUP);
-  pinMode(3,INPUT_PULLUP);
-  pinMode(4,INPUT_PULLUP);
-  pinMode(5,INPUT_PULLUP);
-  pinMode(6,INPUT_PULLUP);
-  pinMode(7,INPUT_PULLUP);
-  pinMode(8,INPUT_PULLUP);
-  pinMode(9,INPUT_PULLUP);
+  pinMode(drum_select_pin, INPUT_PULLUP);
+  pinMode(led_pin, OUTPUT);
+  digitalWrite(led_pin, HIGH);  
+  pinMode(amp_control_pin, OUTPUT);
+  digitalWrite(amp_control_pin, HIGH);
+  pinMode(piezo_pin, INPUT);
+  pinMode(pitch_pin, INPUT);
+  
+  // pinMode(3,INPUT_PULLUP);
+  // pinMode(4,INPUT_PULLUP);
+  // pinMode(5,INPUT_PULLUP);
+  // pinMode(6,INPUT_PULLUP);
+  // pinMode(7,INPUT_PULLUP);
+  // pinMode(8,INPUT_PULLUP);
+  // pinMode(9,INPUT_PULLUP);
 //    pinMode(10,INPUT_PULLUP);
 
   //SPI
@@ -422,18 +432,17 @@ void setup() {
 
 
   // set up the ADC
-  // SFREQ=analogRead(0);
-  // ADCSRA &= ~PS_128;  // remove bits set by Arduino library
-  // // Choose prescaler PS_128.
-  // ADCSRA |= PS_128;
-  // ADMUX = 64;
-  // sbi(ADCSRA, ADSC);
+   SFREQ=analogRead(0);
+   ADCSRA &= ~PS_128;  // remove bits set by Arduino library
+   // Choose prescaler PS_128.
+   ADCSRA |= PS_128;
+   ADMUX = 64;
+   sbi(ADCSRA, ADSC);
          
   // SPI.begin();
   // SPI.beginTransaction (SPISettings (16000000, MSBFIRST, SPI_MODE0));
     //SPI.setBitOrder(MSBFIRST);
 }
-
 
 
 void loop() {  
@@ -453,18 +462,14 @@ void loop() {
   uint8_t inputSelect = 0;
   unsigned long lastHit = 0;
   uint16_t lockOut = 0, inputLockOut = 0;
+  long sleepTimeoutCounter = SLEEP_TIMEOUT;
   
   while(1) { 
-
-  if(loopFreq++ >= 200000) {
-    long now = millis();
-    Serial.print("loop frequency: ");
-    Serial.println(loopFreq/(float)(now - loopTime));
-    loopFreq = 0;
-    loopTime = now;
-    Serial.print("ring count: ");
-    Serial.println(RingCount);
+    if(--sleepTimeoutCounter <= 0) {
+      sleepNow();
+      sleepTimeoutCounter = SLEEP_TIMEOUT;
     }
+
     //------ Add current sample word to ringbuffer FIFO --------------------  
         
     if (RingCount<255) {  //if space in ringbuffer
@@ -565,14 +570,16 @@ void loop() {
 
 //----------------- Handle Triggers ------------------------------
     if(inputLockOut) inputLockOut--;
-    if (!digitalReadFast(2) && inputLockOut == 0) {
+    if (!digitalReadFast(drum_select_pin) && inputLockOut == 0) {
       if(++inputSelect > 7) inputSelect = 0;
       Serial.print("input select: ");
       Serial.println(inputSelect);
       inputLockOut = 10000;
+      sleepTimeoutCounter = SLEEP_TIMEOUT;
       // delay(200);
     }
     if(piezo > 100) {
+      sleepTimeoutCounter = SLEEP_TIMEOUT;
       // attack = piezo * 16/1024;
       attack = piezo / 1024.0;
 //      delay(50);
@@ -615,39 +622,10 @@ void loop() {
 //-----------------------------------------------------------------
 
 //--------------- ADC block -------------------------------------
-    // if (!(divider++)) {
-    //   int pitchRaw = analogRead(A0);
-    //   //pitch=((ADCL+(ADCH<<8))>>3)+1;
-    //   pitch= (pitchRaw>>3)+1;
-    // }
-    // int tmp = analogRead(A1);
-    // if(tmp > 100) {
-    //   int max = 0;
-    //   while(tmp > max) {
-    //     max = tmp;
-    //     tmp = analogRead(A1);
-    //   }
-    //   piezo = max;
-    // } else {
-    //   piezo = 0;
-    // }
-      
-      
     
     if (!(ADCSRA & 64)) {
-
-      if(adcFreq++ >= 200000) {
-        long now = millis();
-        Serial.print("adc frequency: ");
-        Serial.println(adcFreq/(float)(now - adcTime));
-        adcFreq = 0;
-        adcTime = now;
-        Serial.print("pitch value: ");
-        Serial.println(pitch);
-      }
       if(lockOut) lockOut--;
       if (MUX==0) {
-        // int pitchRaw = analogread(A0);
         pitch=((ADCL+(ADCH<<8))>>3)+1;
         //pitch= (pitchRaw>>3)+1;
         MUX = 1;
@@ -680,4 +658,28 @@ void loop() {
   }
  
 }
-
+void wake () {
+  sleep_disable ();         // first thing after waking from sleep:
+  detachInterrupt (0);      // stop LOW interrupt
+}  // end of wake
+void sleepNow () {
+  digitalWrite(led_pin, LOW);
+  digitalWrite(amp_control_pin, LOW);
+  set_sleep_mode (SLEEP_MODE_PWR_DOWN);   
+  byte old_ADCSRA = ADCSRA;
+  ADCSRA = 0;            // turn off ADC
+  power_all_disable ();  // power off ADC, Timer 0 and 1, serial interface
+  noInterrupts ();          // make sure we don't get interrupted before we sleep
+  sleep_enable ();          // enables the sleep bit in the mcucr register
+  byte mcucr1 = MCUCR | _BV(BODS) | _BV(BODSE);  //turn off the brown-out detector
+  byte mcucr2 = mcucr1 & ~_BV(BODSE);
+  MCUCR = mcucr1;
+  MCUCR = mcucr2;
+  attachInterrupt (0, wake, LOW);  // wake up on low level
+  interrupts ();           // interrupts allowed now, next instruction WILL be executed
+  sleep_cpu ();            // here the device is put to sleep
+  power_all_enable();    // power everything back on
+  ADCSRA = old_ADCSRA;
+  digitalWrite(led_pin, HIGH);
+  digitalWrite(amp_control_pin, HIGH);
+}  // end of sleepNow
